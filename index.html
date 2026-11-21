@@ -309,14 +309,14 @@
 
   <script>
     const AEMET_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0dWVyb2p1bmNvamF2aWVyQGdtYWlsLmNvbSIsImp0aSI6ImE3YWM3MjE4LTYzZjYtNDJlZS05MDY1LTQ0ODhhMzY4MTNjYiIsImlzcyI6IkFFTUVUIiwiaWF0IjoxNzczMzE2MTAwLCJ1c2VySWQiOiJhN2FjNzIxOC02M2Y2LTQyZWUtOTA2NS00NDg4YTM2ODEzY2IiLCJyb2xlIjoiIn0.TwFrksLEvG7-0nFQlpv2zH3XskKy5AxJDEEaqjKHQp0";
+    const WORKER_AEMET_URL = "https://morning-salad-4534.tuerojuncojavier2.workers.dev/aemet";
 
-    // Puntos de medición AEMET en Llanes (se actualizan automáticamente desde OpenData)
     const AEMET_STATIONS = [
       {
-        id: "AEMET-1183X",
+        id: "AEMET-1",
         emaCode: "1183X",
         type: "meteo",
-        name: "Estación AEMET Llanes (Villa / Puerto)",
+        name: "Estación AEMET Llanes (Punto 1)",
         zone: "AEMET · Telemetría Oficial",
         lat: 43.4214,
         lng: -4.7539,
@@ -324,10 +324,10 @@
         data: null
       },
       {
-        id: "AEMET-CUE",
+        id: "AEMET-2",
         emaCode: "1184X",
         type: "meteo",
-        name: "Estación AEMET Llanes (Sector Costa / Cué)",
+        name: "Estación AEMET Llanes (Punto 2)",
         zone: "AEMET · Telemetría Costa",
         lat: 43.4189,
         lng: -4.7325,
@@ -597,7 +597,7 @@
       return `
         <div>
           <div class="popup-header">
-            <span class="popup-id meteo">${st.id} · METEO</span>
+            <span class="popup-id meteo">${st.emaCode} · METEO</span>
             <span>${st.lat.toFixed(4)}, ${st.lng.toFixed(4)}</span>
           </div>
           <div class="popup-title">${st.name}</div>
@@ -629,7 +629,7 @@
             </div>
           </div>
           <div class="popup-footer">
-            <span>API AEMET OPENDATA</span>
+            <span>CLOUDFLARE · AEMET</span>
             <a class="btn-open meteo" href="${st.url}" target="_blank" rel="noopener noreferrer">Ficha AEMET ↗</a>
           </div>
         </div>
@@ -738,28 +738,23 @@
       if (activeEl) activeEl.classList.add('active');
     }
 
-    // Conexión directa a AEMET OpenData para actualizar los 2 puntos de Llanes
     async function fetchAemetLlanes() {
       const statusEl = document.getElementById('aemet-status');
       try {
-        const resMeta = await fetch(
-          `https://opendata.aemet.es/opendata/api/observacion/convencional/todas?api_key=${encodeURIComponent(AEMET_API_KEY)}`
+        const resData = await fetch(
+          `${WORKER_AEMET_URL}?api_key=${encodeURIComponent(AEMET_API_KEY)}`
         );
-        if (!resMeta.ok) throw new Error(`HTTP ${resMeta.status}`);
-        const metaJson = await resMeta.json();
-        if (!metaJson.datos) throw new Error("Sin URL de datos AEMET");
-
-        const resData = await fetch(metaJson.datos);
-        if (!resData.ok) throw new Error(`HTTP datos ${resData.status}`);
+        if (!resData.ok) throw new Error(`HTTP ${resData.status}`);
         const observations = await resData.json();
+        if (!Array.isArray(observations)) throw new Error("Respuesta AEMET no válida");
 
-        // Filtrar observaciones del concejo de Llanes (por nombre LLANES o coordenadas locales)
-        const llanesObs = observations.filter(o =>
+        // Buscar estaciones en el concejo de Llanes (o por coordenadas dentro del concejo)
+        let llanesObs = observations.filter(o =>
           (o.ubi && o.ubi.toUpperCase().includes("LLANES")) ||
-          (o.idema && (o.idema.startsWith("1183") || o.idema.startsWith("1184")))
+          (o.idema && (o.idema.startsWith("1183") || o.idema.startsWith("1184"))) ||
+          (o.lat >= 43.35 && o.lat <= 43.47 && o.lon >= -4.96 && o.lon <= -4.64)
         );
 
-        // Agrupar por idema quedándonos con la lectura más reciente (fint)
         const latestByStation = {};
         llanesObs.forEach(obs => {
           if (!latestByStation[obs.idema] || obs.fint > latestByStation[obs.idema].fint) {
@@ -773,6 +768,8 @@
           const matched = stationList.find(s => s.idema === st.emaCode) || stationList[idx];
           if (matched) {
             st.data = matched;
+            st.emaCode = matched.idema || st.emaCode;
+            st.url = `https://www.aemet.es/es/eltiempo/observacion/ultimosdatos?k=ast&l=${st.emaCode}`;
             if (matched.lat && matched.lon) {
               st.lat = matched.lat;
               st.lng = matched.lon;
@@ -828,7 +825,6 @@
       }
     }, 1000);
 
-    // Primera carga inmediata al abrir el mapa
     fetchAemetLlanes();
   </script>
 </body>
