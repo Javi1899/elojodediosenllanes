@@ -691,4 +691,157 @@
     });
 
     const listContainer = document.getElementById('cam-list');
-    const ALL_NODES = [...AEMET_STATIONS, ...CAM
+    const ALL_NODES = [...AEMET_STATIONS, ...CAMERAS];
+
+    ALL_NODES.forEach((node) => {
+      const isDgt = node.type === "dgt";
+      const isMeteo = node.type === "meteo";
+      const iconToUse = isMeteo ? meteoRadarIcon : (isDgt ? dgtRadarIcon : webRadarIcon);
+
+      const marker = L.marker([node.lat, node.lng], {
+        icon: iconToUse
+      }).addTo(map);
+
+      marker.bindPopup(() => buildPopupHTML(node), {
+        closeButton: true,
+        autoPan: true
+      });
+
+      marker.on('mouseover', function () {
+        this.openPopup();
+        highlightSidebar(node.id);
+      });
+
+      markers[node.id] = marker;
+
+      const item = document.createElement('div');
+      item.className = `cam-item ${isDgt ? 'dgt-item' : ''} ${isMeteo ? 'meteo-item' : ''}`;
+      item.id = `sidebar-cam-${node.id}`;
+      item.innerHTML = `
+        <div class="cam-item-title">${node.name}</div>
+        <div class="cam-item-meta">
+          <span>${node.zone}</span>
+          <span id="meta-${node.id}">${isMeteo ? 'AEMET LIVE' : (isDgt ? 'DGT A-8' : 'ID #' + node.id)}</span>
+        </div>
+      `;
+      item.addEventListener('mouseenter', () => {
+        map.panTo([node.lat, node.lng], { animate: true, duration: 0.4 });
+        marker.openPopup();
+        highlightSidebar(node.id);
+      });
+      item.addEventListener('click', () => {
+        map.setView([node.lat, node.lng], 15);
+        marker.openPopup();
+      });
+      listContainer.appendChild(item);
+    });
+
+    function highlightSidebar(id) {
+      document.querySelectorAll('.cam-item').forEach(el => el.classList.remove('active'));
+      const activeEl = document.getElementById(`sidebar-cam-${id}`);
+      if (activeEl) activeEl.classList.add('active');
+    }
+
+    async function fetchAemetLlanes() {
+      const statusEl = document.getElementById('aemet-status');
+      try {
+        const resData = await fetch(
+          `${WORKER_AEMET_URL}?api_key=${encodeURIComponent(AEMET_API_KEY)}`
+        );
+        if (!resData.ok) throw new Error(`HTTP ${resData.status}`);
+        const observations = await resData.json();
+        if (!Array.isArray(observations)) throw new Error("Respuesta AEMET no válida");
+
+        // Buscar todas las estaciones en el concejo de Llanes (Llanes y Niembru-Llanes)
+        const llanesObs = observations.filter(o => {
+          const ubi = (o.ubi || "").toUpperCase();
+          return (
+            ubi.includes("LLANES") ||
+            ubi.includes("NIEMBRU") ||
+            ubi.includes("NIEMBRO") ||
+            (o.lat >= 43.36 && o.lat <= 43.47 && o.lon >= -4.96 && o.lon <= -4.64)
+          );
+        });
+
+        const latestByStation = {};
+        llanesObs.forEach(obs => {
+          if (!latestByStation[obs.idema] || obs.fint > latestByStation[obs.idema].fint) {
+            latestByStation[obs.idema] = obs;
+          }
+        });
+
+        const stationList = Object.values(latestByStation);
+        let activeCount = 0;
+
+        AEMET_STATIONS.forEach((st) => {
+          const matched = stationList.find(s => {
+            const ubi = (s.ubi || "").toUpperCase();
+            const hasInclude = st.matchKeywords.some(k => ubi.includes(k));
+            const hasExclude = st.excludeKeywords.some(k => ubi.includes(k));
+            return hasInclude && !hasExclude;
+          });
+
+          if (matched) {
+            activeCount++;
+            st.data = matched;
+            st.emaCode = matched.idema || st.emaCode;
+            st.url = `https://www.aemet.es/es/eltiempo/observacion/ultimosdatos?k=ast&l=${st.emaCode}`;
+            if (matched.lat && matched.lon) {
+              st.lat = matched.lat;
+              st.lng = matched.lon;
+              markers[st.id].setLatLng([st.lat, st.lng]);
+            }
+            if (matched.ubi) {
+              st.name = `AEMET · ${matched.ubi}`;
+              const titleEl = document.querySelector(`#sidebar-cam-${st.id} .cam-item-title`);
+              if (titleEl) titleEl.textContent = st.name;
+            }
+            const metaEl = document.getElementById(`meta-${st.id}`);
+            if (metaEl && matched.ta !== undefined) {
+              metaEl.textContent = `${matched.ta}°C · ${matched.vv !== undefined ? (matched.vv * 3.6).toFixed(0) + ' km/h' : ''}`;
+              metaEl.style.color = "var(--meteo)";
+            }
+            if (markers[st.id].isPopupOpen()) {
+              markers[st.id].setPopupContent(buildMeteoPopupHTML(st));
+            }
+          }
+        });
+
+        statusEl.textContent = `AEMET: OK (${activeCount}/2 EST.)`;
+        statusEl.style.color = "var(--meteo)";
+      } catch (err) {
+        console.error("Error AEMET:", err);
+        statusEl.textContent = "AEMET: REINTENTANDO...";
+        statusEl.style.color = "var(--dgt)";
+      }
+    }
+
+    let secondsLeft = 60;
+    const countdownEl = document.getElementById('countdown');
+
+    function forceRefresh() {
+      cacheBuster = Date.now();
+      secondsLeft = 60;
+      countdownEl.textContent = secondsLeft;
+      CAMERAS.forEach(cam => {
+        const marker = markers[cam.id];
+        if (marker && marker.isPopupOpen()) {
+          marker.setPopupContent(buildPopupHTML(cam));
+        }
+      });
+      fetchAemetLlanes();
+    }
+
+    setInterval(() => {
+      secondsLeft--;
+      if (secondsLeft <= 0) {
+        forceRefresh();
+      } else {
+        countdownEl.textContent = secondsLeft;
+      }
+    }, 1000);
+
+    fetchAemetLlanes();
+  </script>
+</body>
+</html>
